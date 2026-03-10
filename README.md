@@ -1,4 +1,4 @@
-# Cursor2API v2
+# Cursor2API v2.5
 
 将 Cursor 文档页免费 AI 对话接口代理转换为 **Anthropic Messages API** 和 **OpenAI Chat Completions API**，支持 **Claude Code** 和 **Cursor IDE** 使用。
 
@@ -30,6 +30,8 @@
 - **全工具支持** - 无工具白名单限制，支持所有 MCP 工具和自定义扩展
 - **多层拒绝拦截** - 自动检测和抑制 Cursor 文档助手的拒绝行为（工具和非工具模式均生效）
 - **三层身份保护** - 身份探针拦截 + 拒绝重试 + 响应清洗，确保输出永远呈现 Claude 身份
+- **🆕 上下文智能压缩** - 长对话老消息自动压缩（非丢弃），保留因果链语义，压缩率 70-80%
+- **🆕 截断自动续写** - 检测被截断的响应（代码块/XML 未闭合），返回 `max_tokens` 让 Claude Code 自动继续
 - **连续同角色消息自动合并** - 满足 Anthropic API 交替要求，解决 Cursor IDE 发送格式兼容问题
 - **上下文清洗** - 自动清理历史对话中的权限拒绝和错误记忆
 - **Chrome TLS 指纹** - 模拟真实浏览器请求头
@@ -92,6 +94,9 @@ cursor2api/
 │   ├── unit-tolerant-parse.mjs  # tolerantParse / parseToolCalls 单元测试
 │   ├── unit-tool-fixer.mjs      # tool-fixer 单元测试
 │   ├── unit-openai-compat.mjs   # OpenAI 兼容性单元测试
+│   ├── compression-test.ts      # 上下文压缩 + tolerantParse 增强测试
+│   ├── integration-compress-test.ts # 压缩流程集成测试
+│   ├── e2e-test.ts              # 端到端 API 测试
 │   ├── e2e-chat.mjs             # 端到端对话测试
 │   └── e2e-agentic.mjs          # Claude Code Agentic 压测
 ├── config.yaml             # 配置文件
@@ -149,6 +154,26 @@ AI 按此格式输出 → 我们解析并转换为标准的 Anthropic `tool_use`
 | **L4: 响应清洗** | `handler.ts` | `sanitizeResponse()` 对所有输出做后处理，将 Cursor 身份引用替换为 Claude |
 
 ## 更新日志
+
+### v2.5.1 (2026-03-10) — 上下文智能压缩 + 截断检测 + tolerantParse 增强
+
+**🗜️ 上下文智能压缩**
+- ✨ 长对话老消息智能压缩（非丢弃），保留完整因果链语义
+- ✨ 工具结果压缩为 1-2 行摘要，助手消息保留工具名 + 参数名
+- ✨ 压缩率 70-80%，彻底解决 Cursor 上下文溢出导致的频繁"继续"问题
+- ✨ 保留区策略：few-shot 头部 2 条 + 最近 6 条消息始终保持原文
+
+**⚠️ 截断自动续写**
+- ✨ 自动检测被截断的响应（代码块/XML 未闭合），返回 `stop_reason: "max_tokens"`
+- ✨ Claude Code 收到 `max_tokens` 后自动继续，无需手动点击"继续"
+- ✨ 流式和非流式响应均生效
+
+**🔧 tolerantParse 增强**
+- ✨ 新增第四层正则兜底解析：处理模型生成代码内容导致的未转义双引号
+- ✨ 解决 `SyntaxError: Expected ',' or '}'` at position 5384 等长参数解析崩溃
+
+**🛡️ 拒绝 Fallback 优化**
+- ✨ 工具模式下拒绝时返回极短引导文本，避免 Claude Code 误判为任务完成
 
 ### v2.5.0 (2026-03-10) — Cursor IDE 适配 + 工具参数修复 + 增量流式
 
