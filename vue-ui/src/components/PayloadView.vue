@@ -133,7 +133,7 @@
 
       <Section v-if="logsStore.payload.toolCalls?.length"
         :title="`🔧 工具调用`" :count="logsStore.payload.toolCalls.length" count-unit="个">
-        <CodeBlock :content="fmt(logsStore.payload.toolCalls)" />
+        <CodeBlock lang="json" :content="fmt(logsStore.payload.toolCalls)" />
       </Section>
 
       <Section v-if="logsStore.payload.retryResponses?.length"
@@ -353,12 +353,9 @@ const CodeBlock = defineComponent({
       const lang = p.lang || '';
       let highlighted = '';
       try {
-        if (lang && hljs.getLanguage(lang)) {
+        // markdown 类型只在 mdPreview 模式下渲染，非 mdPreview 时显示原始文本
+        if (lang && lang !== 'markdown' && hljs.getLanguage(lang)) {
           highlighted = hljs.highlight(content, { language: lang }).value;
-        } else {
-          // 自动检测，优先尝试 JSON
-          const auto = hljs.highlightAuto(content, ['json', 'javascript', 'typescript', 'python', 'bash', 'yaml']);
-          highlighted = auto.value;
         }
       } catch { highlighted = ''; }
       if (highlighted) {
