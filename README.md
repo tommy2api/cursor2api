@@ -106,6 +106,26 @@ npm run dev
 npm run build && npm start
 ```
 
+### Docker / GHCR 镜像
+
+仓库已包含 GitHub Actions 自动构建流程 [`.github/workflows/docker.yml`](./.github/workflows/docker.yml)：
+
+- 向 `main` 提交代码时，自动构建并推送 `ghcr.io/tommy2api/cursor2api:latest`
+- 推送版本标签（如 `v2.7.7`）时，自动推送 `v2.7.7`、`2.7.7`、`2.7` 等版本标签
+- 创建或更新指向 `main` 的 Pull Request 时，只做构建校验，不推送镜像
+
+拉取已发布镜像示例：
+
+```bash
+docker pull ghcr.io/tommy2api/cursor2api:latest
+```
+
+如果你想直接使用远程镜像部署，可将 `docker-compose.yml` 中的 `build` 段移除，仅保留：
+
+```yaml
+image: ghcr.io/tommy2api/cursor2api:latest
+```
+
 ### 4. 配合 Claude Code 使用
 
 ```bash
