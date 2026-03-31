@@ -74,6 +74,16 @@ max_history_messages: -1
 # 环境变量: MAX_HISTORY_TOKENS=120000
 max_history_tokens: 120000
 
+# ==================== 上下文压力膨胀（防截断核心机制） ====================
+# 虚增报告给客户端的 input_tokens，让 Claude Code 提前触发自动压缩
+# 原理：Claude Code 假设 context window 200K，在 ~80%(160K) 时自动压缩
+#        但 Cursor API 实际 window 只有 ~150K，输出空间更早被挤压
+# 膨胀系数：1.35 = 200K/150K（推荐值，精确匹配 Cursor 实际窗口比例）
+# 效果：Cursor 实际输入 ~118K 时，报告 ~160K → 客户端提前压缩 → 避免截断
+# 设为 1.0 关闭膨胀，设为 1.5 则更激进地触发压缩
+# 环境变量: CONTEXT_PRESSURE=1.35
+# context_pressure: 1.35
+
 # ==================== Thinking 开关（最高优先级） ====================
 # 控制是否向 Cursor 发送 thinking 请求，优先级高于客户端传入的 thinking 参数
 # 设为 true: 强制启用 thinking（即使客户端没请求也注入）
@@ -155,6 +165,24 @@ tools:
   #   false: [默认] 正常注入工具定义
   # 环境变量: TOOLS_DISABLED=true|false
   disabled: false
+
+  # ★ 自适应历史预算（默认关闭）
+  #   true:  根据工具数量自动收紧历史 token 预算，给输出留更多空间
+  #          工具越多 → 额外预留越多输出空间（90个工具约多留 8K tokens）
+  #          有效缓解长对话 + 多工具场景下的 max_output_token 截断问题
+  #   false: [默认] 关闭自适应，完全使用 max_history_tokens 的固定值
+  # 环境变量: TOOLS_ADAPTIVE_BUDGET=true|false
+  # adaptive_budget: true
+
+  # ★ 智能截断（默认关闭）
+  #   true:  按工具类型差异化截断结果，保留最有价值的部分
+  #          Read    → 头部 50% + 尾部 30%（文件头有 import，尾部有关键代码）
+  #          Bash    → 头部 20% + 尾部 60%（错误信息在末尾）
+  #          Search  → 头部 70% + 尾部 15%（第一批匹配最相关）
+  #          Default → 头部 60% + 尾部 40%（通用平衡策略）
+  #   false: [默认] 所有工具结果统一使用 60/40 头尾截断
+  # 环境变量: TOOLS_SMART_TRUNCATION=true|false
+  # smart_truncation: true
 
 # ==================== 响应内容清洗（可选，默认关闭） ====================
 # 开启后，会将响应中 Cursor 相关的身份引用替换为 Claude

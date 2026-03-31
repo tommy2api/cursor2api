@@ -71,6 +71,19 @@ services:
       # 仅在极端省上下文场景下再启用，日常推荐保持 false（由 config.yaml 管理）
       # - TOOLS_DISABLED=true
 
+      # ── 上下文压力膨胀（防截断） ──
+      # 虚增 input_tokens 让 Claude Code 提前触发自动压缩，有效减少 max_output_token 截断
+      # 1.35 = 200K(Claude Code假设窗口) / 150K(Cursor实际窗口)，设 1.0 关闭
+      # - CONTEXT_PRESSURE=1.35
+
+      # ── 自适应历史预算 ──
+      # 工具数量越多，自动预留越多输出空间（90工具约多留 8K tokens）
+      # - TOOLS_ADAPTIVE_BUDGET=true
+
+      # ── 智能截断 ──
+      # 按工具类型差异化截断结果（Read/Bash/Search 各用不同头尾比例）
+      # - TOOLS_SMART_TRUNCATION=true
+
       # ── 响应内容清洗 ──
       # 开启后会将响应中 Cursor 身份引用替换为 Claude（默认关闭）
       # - SANITIZE_RESPONSE=true

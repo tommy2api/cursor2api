@@ -131,6 +131,18 @@ export function estimateInputTokens(body: AnthropicRequest): number {
         total += 350;                    // Tool use guidelines and behavior instructions
     }
 
+    // ★ 上下文压力膨胀（Context Pressure Inflation）
+    // Claude Code 假设模型的 context window 是 200K tokens，在 ~80%（160K）时触发自动压缩。
+    // 但 Cursor API 的实际 context window 只有 ~150K tokens。
+    // 这意味着 Claude Code 到 160K 才压缩，而 Cursor 在 ~120K 输入时就已开始挤压输出空间。
+    // 解决方案：虚增 input_tokens，让 Claude Code 以为上下文更满，提前触发压缩。
+    // 膨胀系数 1.35 = 200K / 150K（Cursor 实际窗口与 Claude Code 假设窗口的比值）
+    // 效果：当 Cursor 实际输入达到 ~118K 时，报告给 Claude Code 的是 ~160K，触发压缩。
+    const contextPressure = getConfig().contextPressure ?? 1.0; // 默认关闭（1.0=不膨胀），推荐 1.35
+    if (contextPressure > 1.0) {
+        total = Math.ceil(total * contextPressure);
+    }
+
     return Math.max(1, total);
 }
 

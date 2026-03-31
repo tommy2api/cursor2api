@@ -531,6 +531,18 @@ I will ALWAYS use this exact \`\`\`json action\`\`\` block format for tool calls
             });
         }
 
+        // ★ 构建 tool_use_id → 工具名映射（用于智能截断策略）
+        const toolUseIdToName = new Map<string, string>();
+        for (const msg of req.messages) {
+            if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                for (const block of msg.content as AnthropicContentBlock[]) {
+                    if (block.type === 'tool_use' && block.id && block.name) {
+                        toolUseIdToName.set(block.id, block.name);
+                    }
+                }
+            }
+        }
+
         // 转换实际的用户/助手消息
         for (let i = 0; i < req.messages.length; i++) {
             const msg = req.messages[i];
@@ -556,7 +568,7 @@ I will ALWAYS use this exact \`\`\`json action\`\`\` block format for tool calls
             } else if (msg.role === 'user' && isToolResult) {
                 // ★ 工具结果：用自然语言呈现，不使用结构化协议
                 // Cursor 文档 AI 不理解 tool_use_id 等结构化协议
-                const resultText = extractToolResultNatural(msg);
+                const resultText = extractToolResultNatural(msg, toolUseIdToName);
                 messages.push({
                     parts: [{ type: 'text', text: resultText }],
                     id: shortId(),
@@ -698,6 +710,17 @@ I will ALWAYS use this exact \`\`\`json action\`\`\` block format for tool calls
         const perToolOverhead = schemaMode === 'full' ? 240 : (schemaMode === 'names_only' ? 5 : 20);
         overhead += 1300 + toolCount * perToolOverhead;
 
+        // ★ 自适应历史预算：工具数量越多，额外预留越多输出空间
+        // 原理：工具数量多时，模型更可能生成复杂的多工具调用响应，需要更多输出空间
+        // 90 个工具 → 额外预留 ~8100 tokens；5 个工具 → 额外预留 ~250 tokens
+        const adaptiveBudgetEnabled = config.tools?.adaptiveBudget === true; // 默认关闭
+        if (adaptiveBudgetEnabled && toolCount > 0) {
+            // 基础预留: 2000 tokens + 每个工具 50 tokens，上限 10000
+            const adaptiveReserve = Math.min(2000 + toolCount * 50, 10000) + Math.floor(toolCount / 10) * 300;
+            overhead += adaptiveReserve;
+            console.log(`[Converter] 自适应预算: ${toolCount} 个工具 → 额外预留 ${adaptiveReserve} tokens 给输出`);
+        }
+
         const historyBudget = Math.max(0, maxHistoryTokens - overhead);
 
         // 从最新消息往前累加，找到超出预算的边界
@@ -837,14 +860,52 @@ function hasToolResultBlock(msg: AnthropicMessage): boolean {
     return (msg.content as AnthropicContentBlock[]).some(b => b.type === 'tool_result');
 }
 
+// ★ 智能截断：按工具类型差异化截断策略
+// 不同工具的输出结构不同，头/尾的信息密度也不同
+interface TruncationStrategy {
+    headRatio: number;  // 头部保留比例
+    tailRatio: number;  // 尾部保留比例
+}
+
+const TOOL_TRUNCATION_STRATEGIES: Record<string, TruncationStrategy> = {
+    // Read/ReadFile: 文件开头有 import/声明，文件结构在前面，但尾部也可能有关键代码
+    read: { headRatio: 0.5, tailRatio: 0.3 },
+    // Bash/命令执行: 错误信息和最终输出在末尾，开头通常是进度/日志
+    bash: { headRatio: 0.2, tailRatio: 0.6 },
+    // Search/Grep: 第一批匹配通常最相关，后续匹配逐渐变弱
+    search: { headRatio: 0.7, tailRatio: 0.15 },
+    // Write/Edit: 结果通常很短（成功/失败），不太需要截断
+    write: { headRatio: 0.5, tailRatio: 0.3 },
+    // 默认策略
+    default: { headRatio: 0.6, tailRatio: 0.4 },
+};
+
+// 工具名 → 截断策略类别映射
+function getToolTruncationCategory(toolName: string): string {
+    const lower = toolName.toLowerCase();
+    if (/^(read|read_file|readfile)$/i.test(lower)) return 'read';
+    if (/^(bash|execute_command|runcommand|run_command|terminal)$/i.test(lower)) return 'bash';
+    if (/^(search|search_files|searchfiles|grep_search|codebase_search|grep|find|locate|ripgrep)$/i.test(lower)) return 'search';
+    if (/^(write|write_to_file|writefile|write_file|edit|edit_file|editfile|replace_in_file|multiedit)$/i.test(lower)) return 'write';
+    // MCP 工具按前缀猜测
+    if (/search|grep|find|query/i.test(lower)) return 'search';
+    if (/exec|run|shell|cmd|command/i.test(lower)) return 'bash';
+    if (/read|get|fetch|load|cat/i.test(lower)) return 'read';
+    return 'default';
+}
+
 /**
  * 将包含 tool_result 的消息转为自然语言格式
  *
  * 关键：Cursor 文档 AI 不懂结构化工具协议（tool_use_id 等），
  * 必须用它能理解的自然对话来呈现工具执行结果
+ *
+ * @param msg - 包含 tool_result 块的用户消息
+ * @param toolUseIdToName - tool_use_id → 工具名的映射（用于智能截断）
  */
-function extractToolResultNatural(msg: AnthropicMessage): string {
+function extractToolResultNatural(msg: AnthropicMessage, toolUseIdToName?: Map<string, string>): string {
     const parts: string[] = [];
+    const smartTruncationEnabled = getConfig().tools?.smartTruncation === true; // 默认关闭
 
     if (!Array.isArray(msg.content)) {
         return typeof msg.content === 'string' ? msg.content : String(msg.content);
@@ -860,15 +921,27 @@ function extractToolResultNatural(msg: AnthropicMessage): string {
                 continue;
             }
 
-            // ★ 动态截断：根据当前上下文大小计算预算，使用头尾保留策略
-            // 头部保留 60%，尾部保留 40%（错误信息、文件末尾内容经常很重要）
+            // ★ 动态截断：根据当前上下文大小计算预算
             const budget = getCurrentToolResultBudget();
             if (resultText.length > budget) {
-                const headBudget = Math.floor(budget * 0.6);
-                const tailBudget = budget - headBudget;
+                // 确定截断策略
+                let strategy = TOOL_TRUNCATION_STRATEGIES['default'];
+                let toolName = '';
+
+                if (smartTruncationEnabled && toolUseIdToName && block.tool_use_id) {
+                    toolName = toolUseIdToName.get(block.tool_use_id) || '';
+                    if (toolName) {
+                        const category = getToolTruncationCategory(toolName);
+                        strategy = TOOL_TRUNCATION_STRATEGIES[category] || strategy;
+                    }
+                }
+
+                const headBudget = Math.floor(budget * strategy.headRatio);
+                const tailBudget = Math.floor(budget * strategy.tailRatio);
                 const omitted = resultText.length - headBudget - tailBudget;
+                const strategyLabel = toolName ? ` (${getToolTruncationCategory(toolName)} strategy for ${toolName})` : '';
                 resultText = resultText.slice(0, headBudget) +
-                    `\n\n... [${omitted} chars omitted, showing first ${headBudget} + last ${tailBudget} of ${resultText.length} chars] ...\n\n` +
+                    `\n\n... [${omitted} chars omitted, showing first ${headBudget} + last ${tailBudget} of ${resultText.length} chars${strategyLabel}] ...\n\n` +
                     resultText.slice(-tailBudget);
             }
 

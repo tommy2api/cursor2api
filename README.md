@@ -1,8 +1,8 @@
-# Cursor2API v2.7.7
+# Cursor2API v2.7.8
 
 将 Cursor 文档页免费 AI 对话接口代理转换为 **Anthropic Messages API** 和 **OpenAI Chat Completions API**，支持 **Claude Code** 和 **Cursor IDE** 使用。
 
-> ⚠️ **版本说明**：当前 v2.7.7 重点修复长 `Write/Edit` 截断续写、OpenAI 流式工具调用恢复，并新增 `degraded` 日志状态与降级原因展示，方便排查“看似成功、实际体验不佳”的请求。
+> ⭐ **v2.7.8 新特性**：新增上下文压力膨胀（Context Pressure Inflation）、自适应历史预算、工具结果智能截断三大防截断机制，从根源缓解 `max_output_token` 截断问题。全部默认关闭，按需开启。
 
 ## 原理
 
@@ -32,6 +32,9 @@
 - **🆕 Thinking 支持** - 客户端驱动，Anthropic `thinking` block + OpenAI `reasoning_content`，模型名含 `thinking` 或传 `reasoning_effort` 即启用
 - **🆕 response_format 支持** - `json_object` / `json_schema` 格式输出，自动剥离 markdown 包装
 - **🆕 动态工具结果预算** - 根据上下文大小自动调整工具结果截断限制，替代固定 15K
+- **🆕 上下文压力膨胀** - 虚增 `input_tokens` 让客户端（Claude Code）提前触发自动压缩，从根源防止截断
+- **🆕 自适应历史预算** - 工具数量越多，自动预留越多输出空间（90 个工具约多留 8K tokens）
+- **🆕 工具结果智能截断** - 按工具类型差异化截断（Read/Bash/Search 各用不同头尾比例）
 - **🆕 Vision 独立代理** - 图片 API 单独走代理，Cursor API 保持直连不受影响
 - **🆕 计费头清除** - 自动清除 `x-anthropic-billing-header` 防止注入警告
 - **工具参数自动修复** - 字段名映射 (`file_path` → `path`)、智能引号替换、模糊匹配修复
@@ -288,8 +291,33 @@ AI 按此格式输出 → 我们解析并转换为标准的 Anthropic `tool_use`
 | `SANITIZE_RESPONSE` | 响应内容清洗开关 (`true`/`false`，默认 `false`) |
 | `TOOLS_PASSTHROUGH` | 🆕 工具透传模式 (`true`/`false`，默认 `false`) |
 | `TOOLS_DISABLED` | 🆕 工具禁用模式 (`true`/`false`，默认 `false`) |
+| `CONTEXT_PRESSURE` | 🆕 上下文压力膨胀系数（默认 `1.0` 关闭，推荐 `1.35`） |
+| `TOOLS_ADAPTIVE_BUDGET` | 🆕 自适应历史预算 (`true`/`false`，默认 `false`) |
+| `TOOLS_SMART_TRUNCATION` | 🆕 工具结果智能截断 (`true`/`false`，默认 `false`) |
 
 > ⚠️ **环境变量优先级高于 `config.yaml`**：若在 docker-compose 等环境中设置了环境变量，该参数的 `config.yaml` 配置会被覆盖，热重载对其**无效**。需要通过 `config.yaml` 动态调整的参数，请勿同时在环境变量中设置。
+
+## 📝 更新日志
+
+### v2.7.8 (2026-03-27)
+
+- **🆕 上下文压力膨胀**（`context_pressure`）：虚增报告给客户端的 `input_tokens`，让 Claude Code 提前触发自动压缩。原理：Claude Code 假设 200K 窗口，但 Cursor 实际只有 ~150K，膨胀系数 1.35 可精确补偿差距
+- **🆕 自适应历史预算**（`tools.adaptive_budget`）：工具数量越多，自动预留越多输出空间，缓解多工具场景下的截断问题
+- **🆕 工具结果智能截断**（`tools.smart_truncation`）：按工具类型差异化截断（Read 头 50%+尾 30%，Bash 头 20%+尾 60%，Search 头 70%+尾 15%）
+- 以上三个功能均默认关闭，支持 `config.yaml` 和环境变量控制，按需开启
+
+### v2.7.7
+
+- 修复长 `Write/Edit` 截断续写、OpenAI 流式工具调用恢复
+- 新增 `degraded` 日志状态与降级原因展示
+
+## 🙏 赞助感谢
+
+感谢以下小伙伴的赞助支持！
+
+| 赞助者 | 时间 |
+|--------|------|
+| NULL（微信昵称） | 2026.03.27 |
 
 ## 免责声明 / Disclaimer
 
